@@ -2,23 +2,48 @@ import logging
 import os
 import httpx
 import random
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+import threading
+from flask import Flask
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ApplicationHandlerStop
 
-# --- Configuration ---
+# --- Web Server Setup (for Render's Free Tier) ---
+
+app = Flask(__name__)
+
+@app.route('/')
+def hello():
+    return "Bot is alive!"
+
+def run_flask_app():
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
+
+# --- Telegram Bot Configuration ---
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-TOKEN = os.environ.get('TELEGRAM_TOKEN')
-NEWS_API_KEY = os.environ.get('NEWS_API_KEY')
+# IMPORTANT: Replace these with env vars in production
+TOKEN = os.getenv("TOKEN")
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 
 COMMANDS = {
-    "start": "🚀 Start the bot and get a welcome message.",
-    "news": "📰 Get news on a topic (e.g., /news funding).",
-    "about": "🌍 Learn more about the OpenStart project.",
-    "quote": "💡 Get a random motivational quote.",
-    "help": "❓ See this list of commands.",
+    "start": "🚀 Start the bot",
+    "news": "📰 Get news on a topic",
+    "about": "🌍 Learn about OpenStart",
+    "quote": "💡 Get a motivational quote",
+    "help": "❓ See this list of commands",
+    "team": "👥 Meet the OpenStart team",
+    "events": "📅 See upcoming events",
+    "mentor": "🎓 Learn about mentorship",
+    "resources": "📚 Access learning materials",
+    "faq": "❔ Frequently Asked Questions",
+    "apply": "📝 How to apply for programs",
+    "contact": "📩 Get in touch with the team",
+    "feedback": "💬 Share your feedback with us",
+    "community": "🌐 Join our global community",
 }
 
 # --- Command Functions ---
@@ -31,71 +56,62 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "I'm your assistant for all things related to startups, funding, and innovation for young founders. "
         "What would you like to do first?"
     )
-    
     keyboard = [
         [KeyboardButton("/news funding"), KeyboardButton("/quote")],
-        [KeyboardButton("/about"), KeyboardButton("/help")]
+        [KeyboardButton("/team"), KeyboardButton("/help")]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    
     await update.message.reply_text(welcome_message, parse_mode='Markdown', reply_markup=reply_markup)
 
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = "Here's what I can do for you:\n\n"
+    help_text = "Here's the full list of what I can do for you:\n\n"
     for command, description in COMMANDS.items():
         help_text += f"/{command} - {description}\n"
     await update.message.reply_text(help_text)
 
+
 async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     about_text = (
         "**🌍 About OpenStart**\n\n"
-        "OpenStart is a global accelerator program designed specifically for **high school students**. "
-        "Our mission is to connect ambitious young minds with world-class mentorship, essential resources, and unique opportunities to build real, meaningful projects. We believe in breaking down barriers to empower the next generation of changemakers, no matter where they are."
+        "OpenStart is a global accelerator program for **high school students**. "
+        "Our mission is to connect ambitious young minds with world-class mentorship, resources, and opportunities to build real, meaningful projects."
     )
     await update.message.reply_text(about_text, parse_mode='Markdown')
 
+
 async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     topic = " ".join(context.args) if context.args else "startup"
-    
     await update.message.reply_text(f"🔍 Searching for the latest news about '{topic}'...")
 
     url = f"https://newsapi.org/v2/everything?q={topic}&searchIn=title&language=en&sortBy=publishedAt&pageSize=5&apiKey={NEWS_API_KEY}"
-
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(url)
             response.raise_for_status()
             data = response.json()
+            articles = data.get("articles", [])
+            if not articles:
+                await update.message.reply_text(f"Sorry, I couldn't find any recent news for '{topic}'.")
+                return
 
-        articles = data.get("articles", [])
-        if not articles:
-            await update.message.reply_text(f"Sorry, I couldn't find any recent news for '{topic}'. Please try another keyword.")
-            return
+            news_message = f"**Top 5 News Articles for '{topic.title()}'**\n\n"
+            for article in articles:
+                news_message += f"▪️ [{article['title']}]({article['url']})\n\n"
 
-        news_message = f"**Top 5 News Articles for '{topic.title()}'**\n\n"
-        for article in articles:
-            title = article['title']
-            article_url = article['url']
-            news_message += f"▪️ [{title}]({article_url})\n\n"
-        
-        await update.message.reply_text(news_message, parse_mode='Markdown', disable_web_page_preview=True)
+            await update.message.reply_text(news_message, parse_mode='Markdown', disable_web_page_preview=True)
 
-    except httpx.HTTPStatusError as e:
-        error_message = e.response.json().get('message', 'An API error occurred.')
-        logging.error(f"News API error: {error_message}")
-        await update.message.reply_text(f"Sorry, I couldn't fetch the news. Error: {error_message}")
     except Exception as e:
-        logging.error(f"An unexpected error occurred in news command: {e}")
-        await update.message.reply_text("An unexpected error occurred. Please try again later.")
+        logging.error(f"News command error: {e}")
+        await update.message.reply_text("Sorry, an error occurred while fetching news.")
+
 
 async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     quotes = [
         "The best way to predict the future is to create it. - Peter Drucker",
-"Your most unhappy customers are your greatest source of learning. - Bill Gates",
-"It’s not about ideas. It’s about making ideas happen. - Scott Belsky",
-"The secret to getting ahead is getting started. - Mark Twain",
-"Don't be afraid to give up the good to go for the great. - John D. Rockefeller",
-"A goal is a dream with a deadline. - Napoleon Hill",
+        "Your most unhappy customers are your greatest source of learning. - Bill Gates",
+        "It’s not about ideas. It’s about making ideas happen. - Scott Belsky",
+        "A goal is a dream with a deadline. - Napoleon Hill",
 "A goal properly set is halfway reached. - Zig Ziglar",
 "A good conscience is a continual Christmas. - Benjamin Franklin",
 "A guaranteed way to be miserable is to spend all your time trying to make everyone else happy. - Larry Winget",
@@ -747,282 +763,128 @@ async def quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
 "Comfort zone: Simply means the routine of one’s daily life – it is a psychological state in which one feels familiar, safe, at ease, and secure. - Roy T. Bennett",
 "Believe in your infinite potential. Your only limitations are those you set upon yourself. - Roy T. Bennett",
 "Most of us must learn to love people and use things rather than loving things and using people. - Roy T. Bennett",
-"Surround yourself with people who believe in your dreams, encourage your ideas, support your ambitions, and bring out the best in you. - Roy T. Bennett",
-"Leaders are limited by their vision rather than by their abilities. - Roy T. Bennett",
-"Remember that things are not always as they appear to be… Curiosity creates possibilities and opportunities. - Roy T. Bennett",
-"Time doesn't heal emotional pain, you need to learn how to let go. - Roy T. Bennett",
-"Life is short. Focus on what really matters most. You have to change your priorities over time. - Roy T. Bennett",
-"Patience is not the ability to wait, but the ability to keep a good attitude while waiting. - Unknown",
-"Don’t let others tell you what to do. Do what you love. - Unknown",
-"Create a vision for the life you really want and then work relentlessly towards making it a reality. - Roy T. Bennett",
-"Life is about accepting the challenges along the way, choosing to keep moving forward, and savoring the journey. - Roy T. Bennett",
-"Integrity is doing what is right and truthful, and doing as you say you would do. - Roy T. Bennett",
-"Be where you are, stop over-thinking, stop over-complicating. Life is what it is. - Unknown",
-"Your beliefs affect your choices. Your choices shape your actions. Your actions determine your results. The future you create depends upon the choices you make and the actions you take today. - Roy T. Bennett",
-"Each new day is a blank page in the diary of your life. The secret of success is in turning that diary into the best story you possibly can. - Douglas Pagels",
-"To care about your outward appearance is important, but what’s more important is to have a beautiful soul. - Roy T. Bennett",
-"When you take control of your attitude, you take control of your life. - Roy T. Bennett",
-"You make the world a better place by making daily improvements to become the best version of yourself. - Roy T. Bennett",
-"You cannot change anyone, but you can be the reason someone changes. - Roy T. Bennett",
-"Everyone enjoys being acknowledged and appreciated. Sometimes even the simplest act of gratitude can change someone's entire day. Take the time to recognize and value the people around you and appreciate those who make a difference in your lives. - Roy T. Bennett",
-"Instead of complaining about the problem and blaming others, start finding the solution. - Roy T. Bennett",
-"Acts of kindness never die. They linger in the memory, giving life to other acts in return. - Jonathan Sacks",
-"Being grateful does not mean that everything is necessarily good. It just means that you can accept it as a gift. - Roy T. Bennett",
-"We all have dreams. But in order to make dreams come into reality, it takes an awful lot of determination, dedication, self-discipline, and effort. - Jesse Owens",
-"Everyone you meet is a part of your journey, but not all of them are meant to stay in your life. Some people are just passing through to bring you gifts; either they're blessings or lessons. - Roy T. Bennett",
-"The level of success you achieve will be in direct proportion to the depth of your commitment. - Roy T. Bennett",
-"Integrity is doing the right thing when nobody's watching, and doing as you say you would do. - Roy T. Bennett",
-"Sometimes it takes a wrong turn to get you to the right place. - Mandy Hale",
-"Create your own miracles; do what you think you cannot do. - Roy T. Bennett",
-"Focus on making yourself better, not on thinking that you are better. - Bohdi Sanders",
-"Push your boundaries beyond the ordinary; be that 'extra' in 'extraordinary.' - Roy T. Bennett",
-"Perfection' is man's ultimate illusion. It simply doesn't exist in the universe…. If you are a perfectionist, you are guaranteed to be a loser in whatever you do. - David D. Burns",
-"Patience is a virtue, but there comes a moment when you must stop being patient and take the day by the throat and shake it. If it fights back; fine. I'd rather end up bloody at the end of the day, then unhurt with no progress made, no knowledge gained. I'd rather have a no, then nothing. I'd forgotten that about myself. - Laurell K. Hamilton",
-"Kindness is not a business. True kindness expects nothing in return and should never act with conditions. - Roy T. Bennett",
-"To learn something new, you need to try new things and not be afraid to be wrong. - Roy T. Bennett",
-"Keep your promises and be consistent. Be the kind of person others can trust. - Roy T. Bennett",
-"If you care about something enough, you'll find a way to make it happen. - Roy T. Bennett",
-"Leadership is an action, not a position. - Donald McGannon",
-"Great leaders create more leaders, not followers. - Roy T. Bennett",
-"Leaders are innovative, entrepreneurial, and future-oriented. They focus on getting the job done. - Carmine Gallo",
-"Good leaders have vision and inspire others to help them turn vision into reality. Great leaders have vision, share vision, and inspire others to create their own. - Roy T. Bennett",
-"Integrity is making sure that the things you say and the things you do are in alignment. - Katrina Mayer",
-"If you have kindness in your heart, you offer acts of kindness to touch the hearts of others every day in the here and now. You are humble. You are beautiful in your own way. You don’t stand around looking to get even or waiting to get, because you are grounded in kindness. You are the light of the world. - Zero Dean",
-"Whenever you are confronted with an opponent, conquer him with love. - Mahatma Gandhi",
-"Good people see the good and bring out the best in other people. - Roy T. Bennett",
-"Highly motivated people don’t quit when they encounter obstacles. They quit when they run out of motivation. - Zero Dean",
-"Be with people who know your worth. You don't need too many people to be happy, just a few real ones who appreciate you for who you are. - Unknown",
-"Beliefs are choices. First you choose your beliefs. Then your beliefs affect your choices. - Roy T. Bennett",
-"Remember that happiness is a way of travel – not a destination. - Roy M. Goodman",
-"Maturity is when you stop complaining and making excuses in your life; you realize everything that happens in life is a result of the previous choice you’ve made and start making new choices to change your life. - Roy T. Bennett",
-"Learn to light a candle in the darkest moments of someone’s life. Be the light that helps others see; it is what gives life its deepest significance. - Roy T. Bennett",
-"One word of encouragement can be enough to spark someone’s motivation to continue with a difficult challenge. - Roy T. Bennett",
-"Life is short. Focus on what really matters most; you should change your priorities over time. - Roy T. Bennett",
-"You were born to stand out, stop trying to fit in. - Roy T. Bennett",
-"Stop giving other people the power to control your happiness, your mind, and your life. If you don't take control of yourself and your own life, someone else is bound to try. - Roy T. Bennett",
-"If you don’t have a goal in life, you are spending your life running around in circles. - Roy T. Bennett",
-"It takes sunshine and rain to make a rainbow. There would be no rainbows without sunshine and rain. - Roy T. Bennett",
-"Being grateful does not mean that everything is necessarily good. It just means that you can accept it as a gift. - Roy T. Bennett",
-"Every choice comes with a consequence. Once you make a choice, you must accept responsibility. You cannot escape the consequences of your choices, whether you like them or not. - Roy T. Bennett",
-"You need to have faith in yourself. Be brave and take risks. You don't have to have it all figured out to move forward. - Roy T. Bennett",
-"Focus on your goals, not your fear. - Roy T. Bennett",
-"Focus on your strengths, not your weaknesses. - Roy T. Bennett",
-"Focus on your values, not your fears. - Roy T. Bennett",
-"Focus on your dreams, not your obstacles. - Roy T. Bennett",
-"Never let hard lessons harden your heart; the hard lessons of life are meant to make you better, not bitter. - Roy T. Bennett",
-"The comfort zone is a psychological state in which one feels familiar, safe, at ease, and secure. You never change your life until you step out of your comfort zone; change begins at the end of your comfort zone. - Roy T. Bennett",
-"Life teaches us the right path is rarely the easy one. - Roy T. Bennett",
-"You cannot control the behavior of others, but you can always choose how you respond to it. - Roy T. Bennett",
-"Success is not how high you have climbed, but how you make a positive difference to the world. - Roy T. Bennett",
-"Life is short. Focus on what really matters most; you have to change your priorities over time. - Roy T. Bennett",
-"Life is about accepting the challenges along the way, choosing to keep moving forward, and savoring the journey. - Roy T. Bennett",
-"No matter how much experience you have, there’s always something new you can learn and room for improvement. - Roy T. Bennett",
-"All I want to do is change the world. - W. Clement Stone",
-"Never underestimate the power you have to take your life in a new direction. - Germany Kent",
-"I choose to make the rest of my life the best of my life. - Louise Hay",
-"Nothing can dim the light that shines from within. - Maya Angelou",
-"Be so good they can’t ignore you. - Steve Martin",
-"Take the risk or lose the chance. - Unknown",
-"Yesterday you said tomorrow. Just do it. - Nike",
-"The elevator to success is out of order. You’ll have to use the stairs, one step at a time. - Joe Girard",
-"Some people want it to happen, some wish it would happen, others make it happen. - Michael Jordan",
-"Don’t quit. Suffer now and live the rest of your life as a champion. - Muhammad Ali",
-"A hill is just another opportunity to show that your determination and perseverance can level anything in your path to success. - Michelle C. Ustaszeski",
-"Don’t tell everyone your plans, instead show them your results. - Unknown",
-"We can do no great things, only small things with great love. - Mother Teresa",
-"I learned this, at least, by my experiment; that if one advances confidently in the direction of his dreams, and endeavors to live the life which he has imagined, he will meet with a success unexpected in common hours. - Henry David Thoreau",
-"Make it happen. Shock everyone. - Unknown",
-"Work hard and be kind and amazing things will happen. - Conan O’Brien",
-"Never stop doing your best just because someone doesn’t give you credit. - Kamari aka Lyrikal",
-"Work hard in silence, let your success be the noise. - Frank Ocean",
-"Work hard now. Suffer and sacrifice now. So that you can live the rest of your life as a champion. - Apolo Ohno",
-"Never stop learning, because life never stops teaching. - Unknown",
-"Winners are not people never fail, but people who never quit. - Unknown",
-"It takes nothing to join the crowd. It takes everything to stand alone. - Hans F. Hansen",
-"Your talent determines what you can do. Your motivation determines how much you’re willing to do. Your attitude determines how well you do it. - Lou Holtz",
-"The happiness of your life depends on the quality of your thoughts. - Marcus Aurelius",
-"Intelligence is the ability to adapt to change. - Stephen Hawking",
-"Leaders can let you fail and yet not let you be a failure. - Stanley McChrystal",
-"Would you like me to give you a formula for success? It’s quite simple, really: Double your rate of failure. You are thinking of failure as the enemy of success. But it isn’t at all. You can be discouraged by failure or you can learn from it, so go ahead and make mistakes. Make all you can. Because remember, that’s where you will find success. - Thomas J. Watson",
-"Be happy with what you have while working for what you want. - Helen Keller",
-"Sunshine all the time makes a desert. - Arabic proverb",
-"The big lesson in life is never be scared of anyone or anything. - Frank Sinatra",
-"I always wanted to be somebody, but now I realise I should have been more specific. - Lily Tomlin",
-"If you think you are too small to make a difference, try sleeping with a mosquito. - Dalai Lama",
-"Don't worry about failure. You only have to be right once. - Drew Houston",
-"You carry the passport to your own happiness. - Diane Von Furstenberg",
-"Never let success get to your head and never let failure get to your heart. - Drake",
-"The greatest discovery of my generation is that a human being can alter his life by altering his attitudes. - William James",
-"Anyone who has ever made anything of importance was disciplined. - Andrew Hendrixson",
-"Don’t spend time beating on a wall, hoping to transform it into a door. - Coco Chanel",
-"Optimism is the one quality more associated with success and happiness than any other. - Brian Tracy",
-"Always keep your eyes open. Keep watching. Because whatever you see can inspire you. - Grace Coddington",
-"What you get by achieving your goals is not as important as what you become by achieving your goals. - Henry David Thoreau",
-"If the plan doesn’t work, change the plan, but never the goal. - Unknown",
-"Don’t focus on negative things; focus on the positive, and you will flourish. - Alek Wek",
-"I surround myself with good people who make me feel great and give me positive energy. - Ali Krieger",
-"The only thing standing in the way between you and your goal is the BS story you keep telling yourself as to why you can’t achieve it. - Jordan Belfort",
-"The only thing worse than starting something and failing… is not starting something. - Seth Godin",
-"Don’t think, just do. - Horace",
-"Everything is learnable. - Brian Tracy",
-"Don’t worry about failure; you only have to be right once. - Drew Houston",
-"Life is like a movie, write your own ending. Keep believing, keep pretending. - Jim Henson",
-"Don’t talk, just act. Don’t say, just show. Don’t promise, just prove. - Unknown",
-"It does not matter how slowly you go so long as you do not stop. - Confucius",
-"Never confuse a single defeat with a final defeat. - F. Scott Fitzgerald",
-"Perseverance is not a long race; it is many short races one after another. - Walter Elliot",
-"Someone, at some point, came up with this very bad idea that an ordinary individual couldn't make a difference in the world. I think that's just a horrible thing. - John Skoll",
-"Work like there is someone working twenty-four hours a day to take it away from you. - Mark Cuban",
-"I am thankful for a problem grudge, for it can in no way be pleasing to me. - Unknown",
-"Be a positive energy tranceiver. Give everything you have to be your best, and good things will come. - Unknown",
-"You cannot plow a field by turning it over in your mind. To begin, begin. - Gordon B. Hinckley",
-"Give your dreams all you’ve got and you’ll be amazed at the energy that comes out of you. - William James",
-"Strength shows not only in the ability to persist, but in the ability to start over. - F. Scott Fitzgerald",
-"As long as you hate, there will be people to hate. - George Harrison",
-"Make sure your worst enemy doesn’t live between your own two ears. - Laird Hamilton",
-"It is a man’s own mind, not his enemy or foe, that lures him to evil ways. - Buddha",
-"The greatest weapon against stress is the ability to choose one thought over another. - William James",
-"Pessimism never won any battle. - Dwight D. Eisenhower",
-"If you hear a voice within you say 'you cannot paint,' then by all means paint, and that voice will be silenced. - Vincent van Gogh",
-"People begin to become successful the minute they decide to be. - Harvey MacKay",
-"Hold the vision, trust the process. - Unknown",
-"May your choices reflect your hopes, not your fears. - Nelson Mandela",
-"Don’t be pushed around by the fears in your mind. Be led by the dreams in your heart. - Roy T. Bennett",
-"Instead of worrying about what you cannot control, shift your energy to what you can create. - Roy T. Bennett",
-"Take responsibility of your own happiness, never put it in other people’s hands. - Roy T. Bennett",
-"Be mindful. Be grateful. Be positive. Be true. Be kind. - Roy T. Bennett",
-"Don’t waste your time in anger, regrets, worries, and grudges. Life is too short to be unhappy. - Roy T. Bennett",
-"Life becomes easier and more beautiful when we can see the good in other people. - Roy T. Bennett",
-"Success is not how high you have climbed, but how you make a positive difference to the world. - Roy T. Bennett",
-"Follow your heart, listen to your inner voice, stop caring about what others think. - Roy T. Bennett",
-"Start each day with a positive thought and a grateful heart. - Roy T. Bennett",
-"Be brave to stand for what you believe in even if you stand alone. - Roy T. Bennett",
-"Do what is right, not what is easy nor what is popular. - Roy T. Bennett",
-"If you have a strong purpose in life, you don’t have to be pushed. Your passion will drive you there. - Roy T. Bennett",
-"Always have a willing hand to help someone, you might be the only one that does. - Roy T. Bennett",
-"Strong people have a strong sense of self-worth and self-awareness; they don’t need the approval of others. - Roy T. Bennett",
-"Knowledge is being aware of what you can do. Wisdom is knowing when not to do it. - Anonymous",
-"Always remember people who have helped you along the way, and don’t forget to lift someone up. - Roy T. Bennett",
-"It’s only after you’ve stepped outside your comfort zone that you begin to change, grow, and transform. - Roy T. Bennett",
-"More smiling, less worrying. More compassion, less judgment. More blessed, less stressed. More love, less hate. - Roy T. Bennett",
-"Take responsibility of your own happiness, never put it in other people’s hands. - Roy T. Bennett",
-"Be the reason someone smiles. Be the reason someone feels loved and believes in the goodness in people. - Roy T. Bennett",
-"Accept yourself, love yourself, and keep moving forward. If you want to fly, you have to give up what weighs you down. - Roy T. Bennett",
-"Believe in yourself. You are braver than you think, more talented than you know, and capable of more than you imagine. - Roy T. Bennett",
-"Live the Life of Your Dreams: Be brave enough to live the life of your dreams according to your vision and purpose instead of the expectations and opinions of others. - Roy T. Bennett",
-"The past is a place of reference, not a place of residence; the past is a place of learning, not a place of living. - Roy T. Bennett",
-"Make improvements, not excuses. Seek respect, not attention. - Roy T. Bennett",
-"Life is about accepting the challenges along the way, choosing to keep moving forward, and savoring the journey. - Roy T. Bennett",
-"Time doesn’t heal emotional pain, you need to learn how to let go. - Roy T. Bennett",
-"Nothing can disturb your peace of mind unless you allow it to. - Roy T. Bennett",
-"You will never follow your own inner voice until you clear up the doubts in your mind. - Roy T. Bennett",
-"Being grateful does not mean that everything is necessarily good. It just means that you can accept it as a gift. - Roy T. Bennett",
-"Always find opportunities to make someone smile, and to offer random acts of kindness in everyday life. - Roy T. Bennett",
-"Courage is feeling fear, not getting rid of fear, and taking action in the face of fear. - Roy T. Bennett",
-"Failure is a bend in the road, not the end of the road. Learn from failure and keep moving forward. - Roy T. Bennett",
-"To learn something new, you need to try new things and not be afraid to be wrong. - Roy T. Bennett",
-"Sometimes all a person wants is an empathetic ear; all he or she needs is to talk it out. Just offering a listening ear and an understanding heart for his or her suffering can be a big comfort. - Roy T. Bennett",
-"It’s your life; you don’t need someone’s permission to live the life you want. Be brave to live from your heart. - Roy T. Bennett",
-"Be brave enough to live the life of your dreams according to your vision and purpose instead of the expectations and opinions of others. - Roy T. Bennett",
-"To have what you have never had, you have to do what you have never done. - Roy T. Bennett",
-"Never lose hope. Storms make people stronger and never last forever. - Roy T. Bennett",
-"The biggest wall you have to climb is the one you build in your mind: Never let your mind talk you out of your dreams, trick you into giving up. Never let your mind become the greatest obstacle to success. To get your mind on the right track, the rest will follow. - Roy T. Bennett",
-"Consistency is the true foundation of trust. Either keep your promises or do not make them. - Roy T. Bennett",
-"Stop doing what is easy. Start doing what is right. - Roy T. Bennett",
-"Maturity is when you stop complaining and making excuses, and start making changes. - Roy T. Bennett",
-"Do not fear failure but rather fear not trying. - Roy T. Bennett",
-"Stop doing what is easy or popular. Start doing what is right. - Roy T. Bennett",
-"Changing your outside world cannot make you happy if you are an unhappy person. The real personal change can only happen from the inside out. If you firstly create the change within yourself, you can turn your life around. - Roy T. Bennett",
-"Unless you try to do something beyond what you have already mastered, you will never grow. - Roy T. Bennett",
-"The one who falls and gets up is stronger than the one who never tried. Do not fear failure but rather fear not trying. - Roy T. Bennett",
-"Gratitude builds a bridge to abundance. - Roy T. Bennett",
-"Once you realize you deserve a bright future, letting go of your dark past is the best choice you will ever make. - Roy T. Bennett",
-"Always believe in yourself and always stretch yourself beyond your limits. Your life is worth a lot more than you think because you are capable of accomplishing more than you know. You have more potential than you think, but you will never know your full potential unless you keep challenging yourself and pushing beyond your own self imposed limits. - Roy T. Bennett",
-"Comfort zone: Simply means the routine of one’s daily life – it is a psychological state in which one feels familiar, safe, at ease, and secure. - Roy T. Bennett",
-"Believe in your infinite potential. Your only limitations are those you set upon yourself. - Roy T. Bennett",
-"Most of us must learn to love people and use things rather than loving things and using people. - Roy T. Bennett",
-"Surround yourself with people who believe in your dreams, encourage your ideas, support your ambitions, and bring out the best in you. - Roy T. Bennett",
-"Leaders are limited by their vision rather than by their abilities. - Roy T. Bennett",
-"Remember that things are not always as they appear to be… Curiosity creates possibilities and opportunities. - Roy T. Bennett",
-"Time doesn't heal emotional pain, you need to learn how to let go. - Roy T. Bennett",
-"Life is short. Focus on what really matters most. You have to change your priorities over time. - Roy T. Bennett",
-"Patience is not the ability to wait, but the ability to keep a good attitude while waiting. - Unknown",
-"Don’t let others tell you what to do. Do what you love. - Unknown",
-"Create a vision for the life you really want and then work relentlessly towards making it a reality. - Roy T. Bennett",
-"Life is about accepting the challenges along the way, choosing to keep moving forward, and savoring the journey. - Roy T. Bennett",
-"Integrity is doing what is right and truthful, and doing as you say you would do. - Roy T. Bennett",
-"Be where you are, stop over-thinking, stop over-complicating. Life is what it is. - Unknown",
-"Your beliefs affect your choices. Your choices shape your actions. Your actions determine your results. The future you create depends upon the choices you make and the actions you take today. - Roy T. Bennett",
-"Each new day is a blank page in the diary of your life. The secret of success is in turning that diary into the best story you possibly can. - Douglas Pagels",
-"To care about your outward appearance is important, but what’s more important is to have a beautiful soul. - Roy T. Bennett",
-"When you take control of your attitude, you take control of your life. - Roy T. Bennett",
-"You make the world a better place by making daily improvements to become the best version of yourself. - Roy T. Bennett",
-"You cannot change anyone, but you can be the reason someone changes. - Roy T. Bennett",
-"Everyone enjoys being acknowledged and appreciated. Sometimes even the simplest act of gratitude can change someone's entire day. Take the time to recognize and value the people around you and appreciate those who make a difference in your lives. - Roy T. Bennett",
-"Instead of complaining about the problem and blaming others, start finding the solution. - Roy T. Bennett",
-"Acts of kindness never die. They linger in the memory, giving life to other acts in return. - Jonathan Sacks",
-"Being grateful does not mean that everything is necessarily good. It just means that you can accept it as a gift. - Roy T. Bennett",
-"Every choice comes with a consequence. Once you make a choice, you must accept responsibility. You cannot escape the consequences of your choices, whether you like them or not. - Roy T. Bennett",
-"You need to have faith in yourself. Be brave and take risks. You don't have to have it all figured out to move forward. - Roy T. Bennett",
-"Focus on your goals, not your fear. - Roy T. Bennett",
-"Focus on your strengths, not your weaknesses. - Roy T. Bennett",
-"Focus on your values, not your fears. - Roy T. Bennett",
-"Focus on your dreams, not your obstacles. - Roy T. Bennett",
-"Never let hard lessons harden your heart; the hard lessons of life are meant to make you better, not bitter. - Roy T. Bennett",
-"The comfort zone is a psychological state in which one feels familiar, safe, at ease, and secure. You never change your life until you step out of your comfort zone; change begins at the end of your comfort zone. - Roy T. Bennett",
-"Life teaches us the right path is rarely the easy one. - Roy T. Bennett",
-"You cannot control the behavior of others, but you can always choose how you respond to it. - Roy T. Bennett",
-"Success is not how high you have climbed, but how you make a positive difference to the world. - Roy T. Bennett",
-"Life is short. Focus on what really matters most; you have to change your priorities over time. - Roy T. Bennett",
-"Life is about accepting the challenges along the way, choosing to keep moving forward, and savoring the journey. - Roy T. Bennett",
-"No matter how much experience you have, there’s always something new you can learn and room for improvement. - Roy T. Bennett",
-"All I want to do is change the world. - W. Clement Stone",
-"Never underestimate the power you have to take your life in a new direction. - Germany Kent",
+"Surround yourself with people who believe in your dreams",
     ]
-    random_quote = random.choice(quotes)
-    await update.message.reply_text(f"💡 Here's a dose of motivation:\n\n*“{random_quote}”*", parse_mode='Markdown')
+    await update.message.reply_text(f"💡 *“{random.choice(quotes)}”*", parse_mode='Markdown')
 
-# --- Message Handling Functions ---
+
+async def team(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    team_text = (
+        "**👥 The OpenStart Team**\n\n"
+        "Our team is a global collaboration of passionate young leaders:\n"
+        "▪️ **Vikusyaaa** (Ukraine)\n"
+        "▪️ **Rakesh Kumar** (India)\n"
+        "▪️ **Cheedhe** (Tunisia)"
+    )
+    await update.message.reply_text(team_text, parse_mode='Markdown')
+
+
+async def events(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📅 Upcoming events and deadlines will be announced here soon. Stay tuned!")
+
+
+async def resources(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📚 We are compiling a library of guides, books, and tools for young founders. This feature will be available shortly!")
+
+
+async def community(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    community_text = "🌐 Join our global community of young innovators on Discord to connect, collaborate, and share ideas!"
+    keyboard = [[InlineKeyboardButton("Join Discord", url="https://discord.gg/your-invite-link")]]  # Replace with real link
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(community_text, reply_markup=reply_markup)
+
+
+async def mentor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mentor_text = "🎓 We will initially assign a mentor for you related to your startup niche and business tech."
+    await update.message.reply_text(mentor_text)
+
+
+async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    faq_text = (
+        "**❔ Frequently Asked Questions**\n\n"
+        "**Q: Who can apply for OpenStart?**\n"
+        "A: Ambitious high school students from anywhere in the world!\n\n"
+        "**Q: Is there a fee to participate?**\n"
+        "A: Our goal is to make our programs as accessible as possible. Details about costs will be available soon."
+    )
+    await update.message.reply_text(faq_text, parse_mode='Markdown')
+
+
+async def apply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    apply_text = (
+        "📝 As of now, you can either visit our website or fill out this Google Form. "
+        "We will respond to you within 48 hours."
+    )
+    keyboard = [[InlineKeyboardButton("Fill Application Form", url="https://forms.gle/oqeBL4fRJXTnTymh9")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(apply_text, reply_markup=reply_markup)
+
+
+async def contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    contact_text = "📩 You can visit our website to get in touch with the OpenStart team."
+    await update.message.reply_text(contact_text)
+
+
+async def feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    feedback_text = "💬 You can share your feedback with us by filling out this form."
+    keyboard = [[InlineKeyboardButton("Share Feedback", url="https://forms.gle/5azM3K8h7ek2B2cn8")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(feedback_text, reply_markup=reply_markup)
+
+# --- Message Handling ---
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.lower()
-    greetings = ["hello", "hi", "hey", "good morning", "good evening"]
-
-    if any(greeting in text for greeting in greetings):
-        await update.message.reply_text(f"Hello {update.effective_user.first_name}! How can I assist you today? You can use the buttons below or send /help.")
+    if any(greeting in text for greeting in ["hello", "hi", "hey"]):
+        await update.message.reply_text(f"Hello {update.effective_user.first_name}! Use /help to see what I can do.")
         raise ApplicationHandlerStop
 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(chat_id=update.effective_chat.id, text="Sorry, I didn't understand that command. Please use /help to see what I can do.")
+    await context.bot.send_message(chat_id=update.effective_chat.id, text="Sorry, I didn't understand that. Try /help for a list of commands.")
 
-
-# --- Bot Setup and Main Logic ---
+# --- Bot Setup ---
 
 async def post_init(application: Application):
     bot_commands = [(command, description) for command, description in COMMANDS.items()]
     await application.bot.set_my_commands(bot_commands)
-    print("Bot commands have been set successfully!")
+    print("Bot commands set successfully!")
 
 def main():
     if not TOKEN:
-        logging.error("TELEGRAM_TOKEN environment variable not set! Please add it to your deployment environment.")
+        logging.error("TELEGRAM_TOKEN is not set!")
         return
     if not NEWS_API_KEY:
-        logging.error("NEWS_API_KEY environment variable not set! Please add it to your deployment environment.")
+        logging.error("NEWS_API_KEY is not set!")
         return
 
+    # Start Flask server in background
+    flask_thread = threading.Thread(target=run_flask_app)
+    flask_thread.start()
+
+    # Start Telegram bot
     application = Application.builder().token(TOKEN).post_init(post_init).build()
 
+    # Register handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("about", about))
     application.add_handler(CommandHandler("news", news))
     application.add_handler(CommandHandler("quote", quote))
+    application.add_handler(CommandHandler("team", team))
+    application.add_handler(CommandHandler("events", events))
+    application.add_handler(CommandHandler("resources", resources))
+    application.add_handler(CommandHandler("community", community))
+    application.add_handler(CommandHandler("mentor", mentor))
+    application.add_handler(CommandHandler("faq", faq))
+    application.add_handler(CommandHandler("apply", apply))
+    application.add_handler(CommandHandler("contact", contact))
+    application.add_handler(CommandHandler("feedback", feedback))
 
+    # Fallbacks
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.COMMAND, unknown))
 
-    print("Bot is running... Press Ctrl-C to stop.")
+    print("Starting Telegram bot polling...")
     application.run_polling()
 
 if __name__ == "__main__":
